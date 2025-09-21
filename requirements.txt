@@ -1,0 +1,77 @@
+# Core async HTTP client
+aiohttp==3.9.1
+
+# Data processing and numerical computation
+pandas==2.0.3
+
+# Statistical analysis (built-in statistics module used, but scipy for advanced stats)
+scipy==1.11.4
+
+# Data visualization
+matplotlib==3.8.2
+seaborn==0.13.0
+
+# Date and time handling
+python-dateutil==2.8.2
+
+# JSON handling (built-in json module used)
+# No additional JSON library needed
+
+# Optional: Better JSON serialization
+orjson==3.9.10
+
+# Development and testing
+pytest==7.4.3
+pytest-asyncio==0.21.1
+
+# Code formatting and linting
+black==23.12.0
+isort==5.12.0
+flake8==6.1.0
+
+# Type checking
+mypy==1.7.1
+
+# Progress bars and CLI utilities
+tqdm==4.66.1
+click==8.1.7
+
+# Rich console output
+rich==13.7.0
+
+# Configuration file support
+PyYAML==6.0.1
+
+# Logging
+loguru==0.7.2
+
+# Environment variables
+python-dotenv==1.0.0
+
+# HTTP utilities for testing
+requests==2.31.0
+
+# Optional: OpenAI API client (if testing with OpenAI)
+# openai==1.6.0
+
+# Optional: Anthropic API client (if testing with Anthropic)
+# anthropic==0.8.1
+
+# Optional: HuggingFace for tokenization
+# transformers==4.36.2
+# tokenizers==0.15.0
+
+# Optional: Jupyter notebook support
+# jupyter==1.0.0
+# ipykernel==6.27.1
+
+# Optional: Database support for storing results
+# sqlalchemy==2.0.23
+
+# Optional: Export to different formats
+# openpyxl==3.1.2  # Excel export
+# tabulate==0.9.0  # Table formatting
+
+# Development tools
+# memory-profiler==0.61.0  # Memory profiling
+# line-profiler==4.1.1     # Line profiling
