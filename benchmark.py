@@ -9,6 +9,7 @@ from zoneinfo import ZoneInfo
 import json
 import pandas as pd
 import random
+import string
 
 
 @dataclass
@@ -19,11 +20,14 @@ class BenchmarkResult:
     tps_per_user: float  # Tokens per second per user
     input_tokens: int
     output_tokens: int
+    input_prompt: string
+    output_prompt: string
 
-# @dataclass
-# class QASet:
-#     prompt: string
-#     answer: string
+@dataclass
+class QASet:
+    concurrency: string
+    prompt: string
+    answer: string
     
 class LLMBenchmark:
     def __init__(self, api_endpoint: str, headers: Dict[str, str], model):
@@ -31,9 +35,7 @@ class LLMBenchmark:
         self.headers = headers
         self.model = model
         self.kst = ZoneInfo("Asia/Seoul")
-    
-    def res_json_parsing(self,data:str) -> Dict:
-        data
+        self.aqset = []
         
     async def single_request_benchmark(self, prompt: str, max_tokens: int = 100) -> BenchmarkResult:
         """단일 요청의 성능 지표 측정"""
@@ -51,6 +53,9 @@ class LLMBenchmark:
         token_times = []
         tokens_received = 0
         final_usage = None
+        buffer = ""
+        contents = []
+        usage = None
         
         async with aiohttp.ClientSession() as session:
             async with session.post(
@@ -59,11 +64,65 @@ class LLMBenchmark:
                 json=payload
             ) as response:
                 
-                # 응답 json 파싱
                 async for line in response.content:
                     if line:
                         current_time = time.time()
                         
+                        try:
+                            text = line.decode("utf-8")
+                            # print(text.split("\n\n"))
+                            # print(line)
+                        except UnicodeDecodeError:
+                            print("Occur Error")
+                            continue
+                                                
+                        buffer += text
+                            
+                        event, buffer = buffer.split("\n",1)
+                        
+                        for line in event.splitlines():
+                            line = line.strip()
+                            
+                            if not line:
+                                continue
+                            if line.startswith("data:"):
+                                json_part = line[len("data:"):].strip()
+                                
+                                try:
+                                    obj = json.loads(json_part)
+                                except json.JSONDecodeError:
+                                    continue
+                                
+                                if "content" in obj["choices"][0]["delta"].keys():
+                                    try:
+                                        content = obj["choices"][0]["delta"].get("content")
+                                    except (KeyError, IndexError, TypeError):
+                                        content = None
+                                        
+                                    if content is not None and content != "":
+                                        # print("추출된 content :", content)
+                                        contents.append(content)
+                        
+                        if buffer.strip().startswith("data:"):
+                            line = buffer.strip()
+                            json_part = line[len("data:"):].strip()
+                            try:
+                                obj = json.loads(json_part)
+                            except json.JSONDecodeError:
+                                pass
+                            else:
+                                try:
+                                    content = obj["choices"][0]["delta"].get("content")
+                                except (KeyError, IndexError, TypeError):
+                                    content = None
+                                if content is not None and content != "":
+                                    # print("추출된 content (마지막) : ", content)
+                                    contents.append(content)
+
+                        # reasoning content 미포함 시킬 경우 하기 코드 주석 해제
+                        # if "reasoning_content" in event:
+                        #     continue
+                                                
                         # 첫 토큰 수신 시간 기록
                         if first_token_time is None:
                             first_token_time = current_time
@@ -71,7 +130,7 @@ class LLMBenchmark:
                         # 토큰별 시간 기록
                         token_times.append(current_time)
                         tokens_received += 1
-        
+                
         end_time = time.time()
         
         # 메트릭 계산
@@ -98,7 +157,9 @@ class LLMBenchmark:
             itl=itl,
             tps_per_user=tps_per_user,
             input_tokens=len(prompt.split()),  # 근사치
-            output_tokens=tokens_received
+            output_tokens=tokens_received,
+            input_prompt=prompt,
+            output_prompt="".join(contents)
         )
     
     async def concurrent_benchmark(self, prompt: str, concurrency: int, max_tokens: int = 100) -> Dict[str, Any]:
@@ -112,6 +173,9 @@ class LLMBenchmark:
         ]
         results = await asyncio.gather(*tasks)
         benchmark_end = time.time()
+        
+        # store prompts
+        qa_set = [[concurrency ,result.input_prompt, result.output_prompt] for result in results]
         
         # 시스템 전체 TPS 계산
         total_output_tokens = sum(r.output_tokens for r in results)
@@ -148,7 +212,8 @@ class LLMBenchmark:
                 "median": statistics.median(itls) if itls else 0
             },
             "total_output_tokens": total_output_tokens,
-            "benchmark_duration": total_benchmark_time
+            "benchmark_duration": total_benchmark_time,
+            "qa_set": qa_set
         }
     
     async def load_test(self, prompt: str, concurrency_levels: List[int], max_tokens: int = 100) -> List[Dict[str, Any]]:
@@ -199,74 +264,107 @@ async def main():
     # print(f"ITL: {single_result.itl:.2f}ms")
     # print(f"TPS per user: {single_result.tps_per_user:.2f}")
     # print(f"Output tokens: {single_result.output_tokens}")
+    # print(f"Input Prompt : {single_result.input_prompt}")
+    # print(f"Output Prompt : {single_result.output_prompt}")
     
     # 50회 반복하고, 결과를 저장
     
     data = []
     
+    completion_prompts = []
+    
     start_time = time.time()
     
-    for i in range(0,1):
-      # shuffle prompts
-      shuffled_prompts = random.sample(prompts,len(prompts))
+    for i in range(0,50):
+        # shuffle prompts
+        shuffled_prompts = random.sample(prompts,len(prompts))
       
-      print(f"\n=== {i+1}차 부하 테스트 ===")
-      concurrency_levels = [1, 5, 10, 20]
-      load_results = await benchmark.load_test(shuffled_prompts, concurrency_levels, max_tokens=8192)
-      
-      for result in load_results:
-          print(f"\nConcurrency {result['concurrency']}:")
-          print(f"  System TPS: {result['system_tps']:.2f}")
-          print(f"  RPS: {result['rps']:.2f}")
-          # print(f"  TTFT P95: {result['ttft_stats']['p95']:.2f}ms")
-          print(f"  TTFT mean: {result['ttft_stats']['mean']:.2f}ms")
-          # print(f"  E2E Latency P95: {result['e2e_latency_stats']['p95']:.2f}ms")
-          print(f"  E2E Latency mean: {result['e2e_latency_stats']['mean']:.2f}ms")
-          print(f"  ITL mean: {result['itl_stats']['mean']:.2f}ms")
-          print(f"  Total Output Token: {result['total_output_tokens']}")
-          print(f"  Benchmark Duration: {result['benchmark_duration']:.2f}s")    
-      
-          data.append({"timestamp":datetime.now(tz=kst)
-                      ,"concurrency_level":result['concurrency']
-                      ,"system_tps":round(result['system_tps'],2)
-                      ,"rps":round(result['rps'],2)
-                      ,"ttft_mean":round(result['ttft_stats']['mean'],2)
-                      ,"e2e_latency_mean":round(result['e2e_latency_stats']['mean'],2)
-                      ,"itl_mean":round(result['itl_stats']['mean'],2)
-                      ,"benchmark_duration":round(result['benchmark_duration'],2)
-                      })
+        print(f"\n=== {i+1}차 부하 테스트 ===")
+        concurrency_levels = [1,5,10]
+        load_results = await benchmark.load_test(shuffled_prompts, concurrency_levels, max_tokens=8192)
+        
+        for result in load_results:
+            print(f"\nConcurrency {result['concurrency']}:")
+            print(f"  System TPS: {result['system_tps']:.2f}")
+            print(f"  RPS: {result['rps']:.2f}")
+            # print(f"  TTFT P95: {result['ttft_stats']['p95']:.2f}ms")
+            print(f"  TTFT mean: {result['ttft_stats']['mean']:.2f}ms")
+            # print(f"  E2E Latency P95: {result['e2e_latency_stats']['p95']:.2f}ms")
+            print(f"  E2E Latency mean: {result['e2e_latency_stats']['mean']:.2f}ms")
+            print(f"  ITL mean: {result['itl_stats']['mean']:.2f}ms")
+            print(f"  Total Output Token: {result['total_output_tokens']}")
+            print(f"  Benchmark Duration: {result['benchmark_duration']:.2f}s")    
+        
+            data.append({"timestamp":datetime.now(tz=kst)
+                        ,"try_num":i+1
+                        ,"concurrency_level":result['concurrency']
+                        ,"system_tps":round(result['system_tps'],2)
+                        ,"rps":round(result['rps'],2)
+                        ,"ttft_mean":round(result['ttft_stats']['mean'],2)
+                        ,"e2e_latency_mean":round(result['e2e_latency_stats']['mean'],2)
+                        ,"itl_mean":round(result['itl_stats']['mean'],2)
+                        ,"benchmark_duration":round(result['benchmark_duration'],2)
+                        })
+            
+            for prompt_set in result['qa_set']:
+                completion_prompts.append({"timestamp":datetime.now(tz=kst)
+                                ,"try_num":i+1
+                                ,"concurrency_level":prompt_set[0]
+                                ,"input_prompt":prompt_set[1]
+                                ,"output_prompt":prompt_set[2]    
+                })
+          
     end_time = time.time()
     
     test_duration = round(end_time - start_time,2)
     
     print(f"Total Test Duration Time : {test_duration}s")
     
-    df = pd.DataFrame(data,columns=[
-      "timestamp",
-      "concurrency_level",
-      "system_tps",
-      "rps",
-      "ttft_mean",
-      "e2e_latency_mean",
-      "itl_mean",
-      "benchmark_duration"
+    # stats df 생성
+    stats_df = pd.DataFrame(data,columns=[
+                                "timestamp",
+                                "try_num",
+                                "concurrency_level",
+                                "system_tps",
+                                "rps",
+                                "ttft_mean",
+                                "e2e_latency_mean",
+                                "itl_mean",
+                                "benchmark_duration"
+                                ])
+    
+    stats_df["timestamp"] = stats_df["timestamp"].dt.strftime("%Y-%m-%d %H:%M:%S")
+    
+    # prompt df 생성
+    prompts_df = pd.DataFrame(completion_prompts, columns=[
+                                        "timestamp",
+                                        "try_num",
+                                        "concurrency_level",
+                                        "input_prompt",
+                                        "output_prompt"
     ])
     
-    df["timestamp"] = df["timestamp"].dt.strftime("%Y-%m-%d %H:%M:%S")
+    prompts_df["timestamp"] = prompts_df["timestamp"].dt.strftime("%Y-%m-%d %H:%M:%S")
     
     model_name = model.split("/")[1]
     
-    output_path = "./results"
-    # 1. nim model
-    if model_name == "llama-3.1-8b-instruct":
-      output_path += f"/nim_{datetime.now(tz=kst)}.csv"
-    # 2. vllm model
-    else:
-      output_path += f"/vllm_{datetime.now(tz=kst)}.csv"
-      
-    df.to_csv(output_path,index=False, encoding="utf-8")
-    print(f"Saved to {output_path}")    
+    stats_output_path = "./results"
+    # # 1. nim model
+    # if model_name == "llama-3.1-8b-instruct":
+    #   output_path += f"/nim_{datetime.now(tz=kst)}.csv"
+    # # 2. vllm model
+    # else:
+    #   output_path += f"/vllm_{datetime.now(tz=kst)}.csv"
     
+    stats_output_path += f"/vllm_{model_name}_{datetime.now(tz=kst)}.csv"
+    
+    prompts_output_path = "./prompts"
+    prompts_output_path += f"/vllm_{model_name}_{datetime.now(tz=kst)}.csv"
+      
+    stats_df.to_csv(stats_output_path,index=False, encoding="utf-8")
+    prompts_df.to_csv(prompts_output_path,index=False, encoding="utf-8")
+    print(f"Saved to {stats_output_path}")
+    print(f"Saved to {prompts_output_path}")
 
 # 실행
 if __name__ == "__main__":
